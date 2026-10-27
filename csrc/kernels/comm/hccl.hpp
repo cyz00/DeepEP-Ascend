@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -98,6 +99,8 @@ struct HCCLContext {
             const auto layer = static_cast<uint32_t>(requested_layer);
             EP_HOST_ASSERT(std::find(available_layers.begin(), available_layers.end(), layer) != available_layers.end() and
                            "EP_COMM_NET_LAYER is unavailable in this communication group");
+            std::printf("[DeepEP] rank %d net_layer=%u\n", rank_idx, layer);
+            std::fflush(stdout);
 
             // Acquire UBMEM channels and Jetties
             acquire_ubmem_channels(layer);
