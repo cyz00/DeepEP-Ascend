@@ -176,8 +176,13 @@ __global__ __vector__ void combine_impl(__gm__ bfloat16_t* x, __gm__ float* topk
     constexpr auto kNumTokensPerTask = 8;
     constexpr auto kNumStages = 2;
     constexpr auto kNumTasksPerDoorbell = 8;
+    // Mesh counts tasks per peer queue, so a shared-queue cadence would publish each
+    // queue only once per `kNumRanks - 1` rounds and defer most writes to the epilogue.
+    constexpr auto kNumTasksPerQueueDoorbell = kNativeMeshJetties ?
+        math::max(1, kNumTasksPerDoorbell / math::max(1, kNumRanks - 1)) : kNumTasksPerDoorbell;
 
     EP_STATIC_ASSERT(math::is_power_of_2(kNumTasksPerDoorbell));
+    EP_STATIC_ASSERT(math::is_power_of_2(kNumTasksPerQueueDoorbell));
 
     using UBLayout = CombineUBLayout<kNumRanks, kNumTopk, kHidden, kNumTokensPerTask, kNumStages, kNumUbBytes>;
     using HiddenReducer = typename UBLayout::HiddenReducer;
@@ -349,7 +354,7 @@ __global__ __vector__ void combine_impl(__gm__ bfloat16_t* x, __gm__ float* topk
 
         if (not is_local) {
             const auto issued = kNativeMeshJetties ? ++ ub->peer_issued_tasks[current_task.rank_idx] : ++ num_issued_remote_tasks;
-            if (issued % kNumTasksPerDoorbell == 0) {
+            if (issued % kNumTasksPerQueueDoorbell == 0) {
                 asc_sync_notify(PIPE_MTE3, PIPE_S, static_cast<event_t>(stage_idx));
                 asc_sync_wait(PIPE_MTE3, PIPE_S, static_cast<event_t>(stage_idx));
                 if constexpr (kNativeMeshJetties) {

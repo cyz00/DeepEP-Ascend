@@ -101,6 +101,9 @@ struct HCCLContext {
                            "EP_COMM_NET_LAYER is unavailable in this communication group");
             std::printf("[DeepEP] rank %d net_layer=%u\n", rank_idx, layer);
             std::fflush(stdout);
+            if (deep_jit::get_env<int>("EP_LOG_LINKS", 0) != 0)
+                for (const auto& dump_layer: available_layers)
+                    dump_links(dump_layer);
 
             // Acquire UBMEM channels and Jetties
             acquire_ubmem_channels(layer);
@@ -129,6 +132,42 @@ private:
     std::vector<HcommMemHandle> jetty_mem_handles;
     // HCOMM shallow-copies channelName pointers; keep channel_names until channel destruction.
     std::vector<std::string> channel_names;
+
+    static std::string format_endpoint(const EndpointDesc& endpoint) {
+        std::string text = "proto=" + std::to_string(static_cast<int>(endpoint.protocol)) +
+            " addr_type=" + std::to_string(static_cast<int>(endpoint.commAddr.type)) + " addr=";
+        char byte_text[3];
+        for (size_t i = 0; i < sizeof(endpoint.commAddr.raws); ++ i) {
+            std::snprintf(byte_text, sizeof(byte_text), "%02x", endpoint.commAddr.raws[i]);
+            text += byte_text;
+        }
+        return text + " loc_type=" + std::to_string(static_cast<int>(endpoint.loc.locType)) +
+            " dev=" + std::to_string(endpoint.loc.device.devPhyId) +
+            "/" + std::to_string(endpoint.loc.device.superDevId) +
+            " server=" + std::to_string(endpoint.loc.device.serverIdx) +
+            "/" + std::to_string(endpoint.loc.device.superPodIdx);
+    }
+
+    // Report every rank-graph link so one can tell how many distinct local ports
+    // a layer really offers, instead of inferring it from bandwidth.
+    void dump_links(uint32_t layer) {
+        for (int peer_rank_idx = 0; peer_rank_idx < num_ranks; ++ peer_rank_idx) {
+            if (peer_rank_idx == rank_idx)
+                continue;
+
+            CommLink* links = nullptr;
+            uint32_t num_links = 0;
+            HCCL_CHECK(HcclRankGraphGetLinks(comm, layer, rank_idx, peer_rank_idx, &links, &num_links));
+            for (uint32_t i = 0; i < num_links; ++ i) {
+                std::printf("[DeepEP] rank %d layer %u peer %d link %u/%u hop=%u src{%s} dst{%s}\n",
+                            rank_idx, layer, peer_rank_idx, i, num_links,
+                            static_cast<unsigned>(links[i].linkAttr.hop),
+                            format_endpoint(links[i].srcEndpointDesc).c_str(),
+                            format_endpoint(links[i].dstEndpointDesc).c_str());
+            }
+        }
+        std::fflush(stdout);
+    }
 
     // Build a channel desc for the first link to `peer_rank_idx` on `layer` whose
     // protocol satisfies `accept`. Returns nullptr if no such link exists.
